@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <math.h>
 #include <xinput.h>
+#include <dsound.h>
 
 #define local static 
 #define global static 
@@ -23,22 +24,21 @@ struct win32_window_dimention {
     int Height;
 };
 
-
 global bool GlobalRunning;
 global win32_offscreen_buffer GlobalBackbuffer;
 
 global unsigned int XOFF, YOFF;
 
-// NOTE(Tejas): We Load the XInput DLL ourselves so that we know it exists.
+// NOTE(Tejas): We Load the XInput and DirectSound DLL ourselves so that we know it exists.
 //              if it does not exist, then we can just ignore it so the user
-//              is free to use any other input API that is supported!
+//              is free to use any other input API that is supported and can play without sounds.
 
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
 #define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION* pVibration)
 typedef X_INPUT_GET_STATE(x_input_get_state);
 typedef X_INPUT_SET_STATE(x_input_set_state);
-X_INPUT_GET_STATE(XInputGetStateStub) { return (0); }
-X_INPUT_SET_STATE(XInputSetStateStub) { return (0); }
+X_INPUT_GET_STATE(XInputGetStateStub) { return (ERROR_DEVICE_NOT_CONNECTED); }
+X_INPUT_SET_STATE(XInputSetStateStub) { return (ERROR_DEVICE_NOT_CONNECTED); }
 
 // NOTE(Tejas): we can check if the function is Stub to check its validity
 global x_input_get_state *XInputGetState_ = XInputGetStateStub; 
@@ -49,10 +49,20 @@ global x_input_set_state *XInputSetState_ = XInputSetStateStub;
 #define XInputGetState XInputGetState_
 #define XInputSetState XInputSetState_
 
+
+#define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPCGUID pcGuidDevice, LPDIRECTSOUND *ppDS, LPUNKNOWN pUnkOuter)
+typedef DIRECT_SOUND_CREATE(direct_sound_create);
+DIRECT_SOUND_CREATE(DirectSoundCreateStub) { return (DSERR_NODRIVER); }
+global direct_sound_create *DirectSoundCreate_ = DirectSoundCreateStub;
+#define DirectSoundCreate DirectSoundCreate_
+
 internal void Win32LoadXInput(void) {
 
     // NOTE(Tejas): Loding the XInput functions that we need form xinput.dll
-    HMODULE XInputLibrary = LoadLibrary("xinput1_3.dll");
+    HMODULE XInputLibrary = LoadLibraryA("xinput1_4.dll");
+
+    // NOTE(Tejas): If Loading 1.4 fails, Load 1.3
+    if (!XInputLibrary) XInputLibrary = LoadLibraryA("xinput1_3.dll");
 
     if (XInputLibrary) {
         // TODO(Tejas): We should probably check if GetProcAddress actually
@@ -63,6 +73,82 @@ internal void Win32LoadXInput(void) {
 
         XInputGetState = (x_input_get_state*)GetProcAddress(XInputLibrary, "XInputGetState");
         XInputSetState = (x_input_set_state*)GetProcAddress(XInputLibrary, "XInputSetState");
+
+    } else {
+        // TODO(Tejas): Couldnt Load the Library, Handle Error...
+    }
+}
+
+internal void Win32InitDSound(HWND Window, int32_t SamplesPerSecond, int32_t BufferSize) {
+
+    HMODULE DSoundLibrary = LoadLibraryA("dsound.dll");
+
+    if (DSoundLibrary) {
+
+        DirectSoundCreate = (direct_sound_create*)GetProcAddress(DSoundLibrary, "DirectSoundCreate");
+
+        LPDIRECTSOUND DirectSound;
+        if (DirectSoundCreate && SUCCEEDED(DirectSoundCreate(0, &DirectSound,0))) {
+
+            WAVEFORMATEX WaveFormat = { };
+            WaveFormat.wFormatTag = WAVE_FORMAT_PCM;
+            WaveFormat.nChannels = 2; // NOTE(Tejas): 2 for stereo
+            WaveFormat.nSamplesPerSec = SamplesPerSecond;
+            WaveFormat.wBitsPerSample = 16;
+            WaveFormat.nBlockAlign = (WaveFormat.nChannels * WaveFormat.wBitsPerSample) / 8;
+            WaveFormat.nAvgBytesPerSec = WaveFormat.nSamplesPerSec * WaveFormat.nBlockAlign;
+            WaveFormat.cbSize = 0;
+
+            // NOTE(Tejas): Read MSDN for IDirectSound8
+            if (SUCCEEDED(DirectSound->SetCooperativeLevel(Window, DSSCL_PRIORITY))) {
+
+                // NOTE(Tejas): MSDN docs suggest that this struct needs to be zero'd out...
+                DSBUFFERDESC BufferDesc = {  };
+                BufferDesc.dwSize = sizeof(BufferDesc);
+                BufferDesc.dwFlags = DSBCAPS_PRIMARYBUFFER;
+
+                LPDIRECTSOUNDBUFFER PrimaryBuffer;
+                if (SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDesc, &PrimaryBuffer, 0))) {
+
+                    if (SUCCEEDED(PrimaryBuffer->SetFormat(&WaveFormat))) {
+                        OutputDebugStringA("Primary BUffer Created\n");
+                    } else {
+                        // TODO(Tejas): Couldnt set the Primary Buffer Format, Handle Error...
+                    }
+
+                } else {
+                    
+                    // TODO(Tejas): Couldnt Create the Direct Sound Buffer, Handle Error...
+                }
+                
+            } else {
+                // TODO(Tejas): Couldnt set the Cooperative Level, Handle Error...
+            }
+
+            // CREATE SECONDARY BUFFER
+
+            DSBUFFERDESC BufferDesc = { };
+            BufferDesc.dwSize = sizeof(BufferDesc);
+            BufferDesc.dwBufferBytes = BufferSize;
+            BufferDesc.lpwfxFormat = &WaveFormat;
+
+            LPDIRECTSOUNDBUFFER SecondaryBuffer;
+            if (SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDesc, &SecondaryBuffer, 0))) {
+
+                int flag = 4 + 8;
+                OutputDebugStringA("Secondary BUffer Created\n");
+                
+            } else {
+                
+                // TODO(Tejas): Couldnt set the Secondary Buffer Format, Handle Error...
+            }
+
+        } else {
+            // TODO(Tejas): Couldnt Load the Function from dll, Handle Error...
+        }
+        
+    } else {
+        // TODO(Tejas): Couldnt Load the Library, Handle Error...
     }
 }
 
@@ -164,9 +250,9 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
     } break;
 
     // TODO(Tejas): There are more keyboard events, look into those
+    // NOTE(Tejas): WM_SYSKEYDOWN and WM_SYSKEYUP means we have to handle alt key keybinds,
+    //              Alt-f4 doesnt work with these.
     case WM_CHAR:
-    case WM_SYSKEYDOWN:
-    case WM_SYSKEYUP:
     case WM_KEYUP:
     case WM_KEYDOWN: {
         const int velo = 5;
@@ -216,6 +302,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     wc.lpszClassName = wnd_name;
 
     Win32LoadXInput();
+    Win32ResizeDIBSection(&GlobalBackbuffer, 1200, 720); 
 
     if (RegisterClassA(&wc)) {
         
@@ -226,9 +313,9 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
         if (Window) {
 
-            Win32ResizeDIBSection(&GlobalBackbuffer, 1200, 720); 
-
             ShowWindow(Window, nCmdShow);
+
+            Win32InitDSound(Window, 48000, 48000*sizeof(int16_t)*2);
 
 
             // NOTE(Tejas): if you specift the CS_OWNDC flag you can use the same DC over and over.
@@ -249,7 +336,11 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                     DispatchMessage(&msg);
                 }
 
-                // NOTE(Tejas): Controller Input
+                // NOTE(Tejas): XInputGetState will stall for a couple of miliseconds if it cant find a
+                //              connected controller. We have to only check input for the controllers that
+                //              we know are connected.
+
+                // NOTE(Tejas): Controller Input (XUSER_MAX_COUNT := 4)
                 // TODO(Tejas): Should we poll this more frequently
                 for (DWORD ControllerIndex = 0; ControllerIndex < XUSER_MAX_COUNT; ControllerIndex++) {
 
@@ -280,19 +371,45 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         int16_t StickX = Pad->sThumbLX;
                         int16_t StickY = Pad->sThumbLY;
 
-                        int Ytest = StickY / 255;
-                        int Xtest = StickX / 255;
+                        int velo = 10;
+                        if (Up)    YOFF -= velo;
+                        if (Down)  YOFF += velo;
+                        if (Right) XOFF += velo;
+                        if (Left)  XOFF -= velo;
 
-                        Ytest = Ytest % 5;
-                        Xtest = Xtest % 5;
+                        const float MAX_STICK = 32767.0f;
+                        const float DEADZONE = 0.1f;
+                        const float OFFSET_SPEED = 5.0f;
 
-                        YOFF -= Ytest;
-                        XOFF += Xtest;
+                        float normX = StickX / MAX_STICK;
+                        float normY = StickY / MAX_STICK;
 
-                        XINPUT_VIBRATION InputVibration = { };
-                        if (LeftShoulder)  InputVibration.wLeftMotorSpeed  = 1500;
-                        if (RightShoulder) InputVibration.wRightMotorSpeed = 1500;
+                        if (fabsf(normX) < DEADZONE) normX = 0.0f;
+                        if (fabsf(normY) < DEADZONE) normY = 0.0f;
+
+                        normX = fminf(fmaxf(normX, -1.0f), 1.0f);
+                        normY = fminf(fmaxf(normY, -1.0f), 1.0f);
+
+                        float absX = fabsf(normX);
+                        float absY = fabsf(normY);
+
+                        WORD leftMotor  = (WORD)(absX * 5000.0f);
+                        WORD rightMotor = (WORD)(absY * 5000.0f);
+
+                        XOFF += leftMotor % 20;
+                        YOFF += rightMotor % 20;
+
+                        XINPUT_VIBRATION InputVibration = {};
+                        InputVibration.wLeftMotorSpeed  = leftMotor;
+                        InputVibration.wRightMotorSpeed = rightMotor;
+
                         XInputSetState(ControllerIndex, &InputVibration);
+
+
+                        // XINPUT_VIBRATION InputVibration = { };
+                        // if (Left || RIGHT) InputVibration.wLeftMotorSpeed  = 100;
+                        // if (Up || Down)    InputVibration.wRightMotorSpeed = 100;
+                        // XInputSetState(ControllerIndex, &InputVibration);
 
                     } else {
 
@@ -308,11 +425,12 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             
         } else {
             
-            // TODO(Tejas): Add Error handling here (failed to create a window)
+            // TODO(Tejas): Failed to create a window, Handle Error...
         }
 
     } else {
-        // TODO(Tejas): Add Error handling here (failed to register window class)
+
+        // TODO(Tejas): Failed to register window class, Handle Error...
     }
 
     return 0;
