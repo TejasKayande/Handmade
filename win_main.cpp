@@ -3,11 +3,11 @@
 
 #include <stdint.h>
 #include <math.h>
+#include <xinput.h>
 
 #define local static 
 #define global static 
 #define internal static 
-
 
 struct win32_offscreen_buffer {
     BITMAPINFO Info;
@@ -23,10 +23,48 @@ struct win32_window_dimention {
     int Height;
 };
 
-global bool Running;
+
+global bool GlobalRunning;
 global win32_offscreen_buffer GlobalBackbuffer;
 
 global unsigned int XOFF, YOFF;
+
+// NOTE(Tejas): We Load the XInput DLL ourselves so that we know it exists.
+//              if it does not exist, then we can just ignore it so the user
+//              is free to use any other input API that is supported!
+
+#define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
+#define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION* pVibration)
+typedef X_INPUT_GET_STATE(x_input_get_state);
+typedef X_INPUT_SET_STATE(x_input_set_state);
+X_INPUT_GET_STATE(XInputGetStateStub) { return (0); }
+X_INPUT_SET_STATE(XInputSetStateStub) { return (0); }
+
+// NOTE(Tejas): we can check if the function is Stub to check its validity
+global x_input_get_state *XInputGetState_ = XInputGetStateStub; 
+global x_input_set_state *XInputSetState_ = XInputSetStateStub;
+
+// NOTE(Tejas): This just shadows the defination of XInputGetState and XInputSetState
+//              that is coming from xinput.h
+#define XInputGetState XInputGetState_
+#define XInputSetState XInputSetState_
+
+internal void Win32LoadXInput(void) {
+
+    // NOTE(Tejas): Loding the XInput functions that we need form xinput.dll
+    HMODULE XInputLibrary = LoadLibrary("xinput1_3.dll");
+
+    if (XInputLibrary) {
+        // TODO(Tejas): We should probably check if GetProcAddress actually
+        //              returns a valid pointer if not we have to set these back
+        //              to Stub. But if we manage to load the dll but the
+        //              function does not exist, we cant relie on the to work
+        //              properly anyways.
+
+        XInputGetState = (x_input_get_state*)GetProcAddress(XInputLibrary, "XInputGetState");
+        XInputSetState = (x_input_set_state*)GetProcAddress(XInputLibrary, "XInputSetState");
+    }
+}
 
 internal win32_window_dimention Win32GetWindowDimention(HWND Window) {
 
@@ -56,31 +94,7 @@ internal void RenderGradient(win32_offscreen_buffer *Buffer, int XOffset, int YO
             uint8_t Blue = (X + XOffset);
             uint8_t Green = (Y + YOffset);
 
-            *Pixel = (Green << 8) | Blue;
-
-            // float fx = (float)X / Buffer->Width;
-            // float fy = (float)Y / Buffer->Height;
-
-            // float cx = fx - 0.5f;
-            // float cy = fy - 0.5f;
-
-            // float dist = sqrtf(cx*cx + cy*cy);
-
-            // float v1 = sinf((cx * 10.0f) + XOffset * 0.01f);
-            // float v2 = sinf((cy * 10.0f) + YOffset * 0.01f);
-            // float v3 = sinf((dist * 20.0f) - XOffset * 0.02f);
-
-            // float intensity = (v1 + v2 + v3) * 0.33f;
-            // intensity = (intensity + 1.0f) * 0.5f;
-
-            // uint8_t r = (uint8_t)(50  + 205 * intensity);
-            // uint8_t g = (uint8_t)(20  + 100 * intensity);
-            // uint8_t b = (uint8_t)(100 + 155 * intensity);
-
-            // *Pixel = (r << 16) | (g << 8) | b;
-
-
-            Pixel++;
+            *Pixel++ = (Green << 8) | Blue;
         }
 
         Row += Buffer->Pitch;
@@ -97,9 +111,11 @@ internal void Win32ResizeDIBSection(win32_offscreen_buffer *Buffer, int Width, i
     Buffer->Width  = Width;
     Buffer->Height = Height;
 
+    // NOTE(Tejas): Buffer->Height is -ve here is so that windows treats it as top down and
+    //              not bottom up.
     Buffer->Info.bmiHeader.biSize = sizeof(BITMAPINFO);
     Buffer->Info.bmiHeader.biWidth = Buffer->Width;
-    Buffer->Info.bmiHeader.biHeight = Buffer->Height;
+    Buffer->Info.bmiHeader.biHeight = -Buffer->Height;
     Buffer->Info.bmiHeader.biPlanes = 1;
     Buffer->Info.bmiHeader.biBitCount = 32;
     Buffer->Info.bmiHeader.biCompression = BI_RGB;
@@ -121,14 +137,11 @@ internal void Win32ResizeDIBSection(win32_offscreen_buffer *Buffer, int Width, i
 internal void Win32DisplayBufferInWindow(HDC DeviceContext, win32_offscreen_buffer Buffer,
                                          int X, int Y, int WindowWidth, int WindowHeight) {
 
-    // NOTE(Tejas): Adjusting the Aspect Ratio
-
-
-
     StretchDIBits(DeviceContext,
                   // X, Y, Width, Height,
                   // X, Y, Width, Height,
-                  X, Y, WindowWidth, WindowHeight,
+                  // X, Y, WindowWidth, WindowHeight,
+                  X, Y, Buffer.Width, Buffer.Height,
                   0, 0, Buffer.Width, Buffer.Height,
                   Buffer.Memory,
                   &Buffer.Info,
@@ -150,17 +163,37 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
         // Win32ResizeDIBSection(&GlobalBackbuffer, Dimentions.Width, Dimentions.Height); 
     } break;
 
+    // TODO(Tejas): There are more keyboard events, look into those
+    case WM_CHAR:
+    case WM_SYSKEYDOWN:
+    case WM_SYSKEYUP:
+    case WM_KEYUP:
     case WM_KEYDOWN: {
-        const int velo = 1;
-        if ((char)wParam == VK_UP) YOFF += velo;
-        if ((char)wParam == VK_DOWN) YOFF -= velo;
-        if ((char)wParam == VK_LEFT) XOFF -= velo;
-        if ((char)wParam == VK_RIGHT) XOFF += velo;
+        const int velo = 5;
+        if ((char)wParam == 'W') YOFF += velo;
+        if ((char)wParam == 'S') YOFF -= velo;
+        if ((char)wParam == 'D') XOFF -= velo;
+        if ((char)wParam == 'A') XOFF += velo;
     } break;
 
     case WM_CLOSE:
     case WM_DESTROY : {
-        Running = false;
+        GlobalRunning = false;
+    } break;
+
+    case WM_PAINT: {
+
+        PAINTSTRUCT p;
+        HDC DeviceContext = BeginPaint(Window, &p);
+
+        RECT rect;
+        GetClientRect(Window, &rect);
+        HBRUSH color = CreateSolidBrush(RGB(255, 0, 255));
+        FillRect(DeviceContext, &rect, color);
+        DeleteObject(color);
+
+        EndPaint(Window, &p);
+        
     } break;
 
     default: {
@@ -177,10 +210,12 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     const char* wnd_name = "Handmade-Hero";
 
     WNDCLASSA wc = { };
-    wc.style         = CS_HREDRAW | CS_VREDRAW;
+    wc.style         = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
     wc.lpfnWndProc   = Win32MainWindowCallBack;
     wc.hInstance     = hInstance;
     wc.lpszClassName = wnd_name;
+
+    Win32LoadXInput();
 
     if (RegisterClassA(&wc)) {
         
@@ -195,30 +230,80 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
             ShowWindow(Window, nCmdShow);
 
-            Running = true;
-            while (Running) {
+
+            // NOTE(Tejas): if you specift the CS_OWNDC flag you can use the same DC over and over.
+            //              This means, this line will only be called once at the start of the loop
+            HDC DeviceContext = GetDC(Window);
+
+            GlobalRunning = true;
+            while (GlobalRunning) {
 
                 MSG msg = { };
                 while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) {
 
                     if (msg.message == WM_QUIT) {
-                        Running = false;
+                        GlobalRunning = false;
                     }
 
                     TranslateMessage(&msg);
                     DispatchMessage(&msg);
                 }
 
+                // NOTE(Tejas): Controller Input
+                // TODO(Tejas): Should we poll this more frequently
+                for (DWORD ControllerIndex = 0; ControllerIndex < XUSER_MAX_COUNT; ControllerIndex++) {
+
+                    XINPUT_STATE ControllerState;
+                    if (XInputGetState(ControllerIndex, &ControllerState) == ERROR_SUCCESS) {
+
+                        // NOTE(Tejas): See XINPUT_GAMEPAD Defination...
+
+                        XINPUT_GAMEPAD *Pad = &ControllerState.Gamepad;
+
+                        bool Up    = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
+                        bool Down  = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
+                        bool Left  = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+                        bool Right = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
+
+                        bool Start = (Pad->wButtons & XINPUT_GAMEPAD_START);
+                        bool Back  = (Pad->wButtons & XINPUT_GAMEPAD_BACK);
+
+                        bool LeftShoulder = (Pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
+                        bool RightShoulder = (Pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+
+                        bool AButton = (Pad->wButtons & XINPUT_GAMEPAD_A);
+                        bool BButton = (Pad->wButtons & XINPUT_GAMEPAD_B);
+                        bool XButton = (Pad->wButtons & XINPUT_GAMEPAD_X);
+                        bool YButton = (Pad->wButtons & XINPUT_GAMEPAD_Y);
+
+                        // TODO(Tejas): I dont know how the values are calculate for the stick movement
+                        int16_t StickX = Pad->sThumbLX;
+                        int16_t StickY = Pad->sThumbLY;
+
+                        int Ytest = StickY / 255;
+                        int Xtest = StickX / 255;
+
+                        Ytest = Ytest % 5;
+                        Xtest = Xtest % 5;
+
+                        YOFF -= Ytest;
+                        XOFF += Xtest;
+
+                        XINPUT_VIBRATION InputVibration = { };
+                        if (LeftShoulder)  InputVibration.wLeftMotorSpeed  = 1500;
+                        if (RightShoulder) InputVibration.wRightMotorSpeed = 1500;
+                        XInputSetState(ControllerIndex, &InputVibration);
+
+                    } else {
+
+                        // NOTE(Tejas): Controller at this ControllerIndex is not plugged in.
+                    }
+                }
+
                 RenderGradient(&GlobalBackbuffer, XOFF, YOFF);
 
-                HDC DeviceContext = GetDC(Window);
-
                 win32_window_dimention Dimentions = Win32GetWindowDimention(Window);
-                Win32DisplayBufferInWindow(DeviceContext, GlobalBackbuffer, 0, 0, Dimentions.Width, Dimentions.Height);
-
-                ReleaseDC(Window, DeviceContext);
-
-                XOFF++; YOFF--;
+                Win32DisplayBufferInWindow(DeviceContext, GlobalBackbuffer, 20, 20, Dimentions.Width, Dimentions.Height);
             }
             
         } else {
