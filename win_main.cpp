@@ -2,79 +2,136 @@
 #include <windows.h>
 
 #include <stdint.h>
+#include <math.h>
 
 #define local static 
 #define global static 
 #define internal static 
 
+
+struct win32_offscreen_buffer {
+    BITMAPINFO Info;
+    void      *Memory;
+    int        Width;
+    int        Height;
+    int        BytesPerPixel;
+    int        Pitch;
+};
+
+struct win32_window_dimention {
+    int Width;
+    int Height;
+};
+
 global bool Running;
+global win32_offscreen_buffer GlobalBackbuffer;
 
-global BITMAPINFO BitmapInfo;
-global void *BitmapMemory;
+global unsigned int XOFF, YOFF;
 
-global int BytesPerPixel;
-global int BitmapWidth;
-global int BitmapHeight;
+internal win32_window_dimention Win32GetWindowDimention(HWND Window) {
 
-global int XOFF, YOFF;
+    win32_window_dimention Result;
 
-internal void RenderGradient(int XOffset, int YOffset) {
+    RECT ClientRect;
+    GetClientRect(Window, &ClientRect);
+    Result.Width  = ClientRect.right - ClientRect.left;
+    Result.Height = ClientRect.bottom - ClientRect.top;
 
-    int Width = BitmapWidth;
-    int Height = BitmapHeight;
-    
-    int Pitch = Width * BytesPerPixel;
-    uint8_t *Row = (uint8_t*) BitmapMemory;
-    for (int Y = 0; Y < BitmapHeight; Y++) {
+    return Result;
+}
+
+internal void RenderGradient(win32_offscreen_buffer *Buffer, int XOffset, int YOffset) {
+
+    // TODO(Tejas): What is better pass by reference or pass by value?
+
+    uint8_t *Row = (uint8_t*) Buffer->Memory;
+
+    for (int Y = 0; Y < Buffer->Height; Y++) {
+
         uint32_t *Pixel = (uint32_t*) Row;
-        for (int X = 0; X < BitmapWidth; X++) {
+
+        for (int X = 0; X < Buffer->Width; X++) {
             // AA RR GG BB 
-            *Pixel = (0x0 << 24) | (0x0 << 16) | ((X + XOffset) << 8) | (Y + YOffset);
+
+            uint8_t Blue = (X + XOffset);
+            uint8_t Green = (Y + YOffset);
+
+            *Pixel = (Green << 8) | Blue;
+
+            // float fx = (float)X / Buffer->Width;
+            // float fy = (float)Y / Buffer->Height;
+
+            // float cx = fx - 0.5f;
+            // float cy = fy - 0.5f;
+
+            // float dist = sqrtf(cx*cx + cy*cy);
+
+            // float v1 = sinf((cx * 10.0f) + XOffset * 0.01f);
+            // float v2 = sinf((cy * 10.0f) + YOffset * 0.01f);
+            // float v3 = sinf((dist * 20.0f) - XOffset * 0.02f);
+
+            // float intensity = (v1 + v2 + v3) * 0.33f;
+            // intensity = (intensity + 1.0f) * 0.5f;
+
+            // uint8_t r = (uint8_t)(50  + 205 * intensity);
+            // uint8_t g = (uint8_t)(20  + 100 * intensity);
+            // uint8_t b = (uint8_t)(100 + 155 * intensity);
+
+            // *Pixel = (r << 16) | (g << 8) | b;
+
+
             Pixel++;
         }
 
-        Row += Pitch;
+        Row += Buffer->Pitch;
     }
 }
 
 // NOTE(Tejas): DIB := Device Independent Bitmap
-internal void Win32ResizeDIBSection(int Width, int Height) {
+internal void Win32ResizeDIBSection(win32_offscreen_buffer *Buffer, int Width, int Height) {
 
-    if (BitmapMemory) {
-        VirtualFree(BitmapMemory, 0, MEM_RELEASE);
+    if (Buffer->Memory) {
+        VirtualFree(Buffer->Memory, 0, MEM_RELEASE);
     }
 
-    BitmapWidth = Width;
-    BitmapHeight = Height;
+    Buffer->Width  = Width;
+    Buffer->Height = Height;
 
-    BitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFO);
-    BitmapInfo.bmiHeader.biWidth = BitmapWidth;
-    BitmapInfo.bmiHeader.biHeight = BitmapHeight;
-    BitmapInfo.bmiHeader.biPlanes = 1;
-    BitmapInfo.bmiHeader.biBitCount = 32;
-    BitmapInfo.bmiHeader.biCompression = BI_RGB;
+    Buffer->Info.bmiHeader.biSize = sizeof(BITMAPINFO);
+    Buffer->Info.bmiHeader.biWidth = Buffer->Width;
+    Buffer->Info.bmiHeader.biHeight = Buffer->Height;
+    Buffer->Info.bmiHeader.biPlanes = 1;
+    Buffer->Info.bmiHeader.biBitCount = 32;
+    Buffer->Info.bmiHeader.biCompression = BI_RGB;
 
-
-    BytesPerPixel = 4;
-    int BitmapMemorySize = (Width * Height) * BytesPerPixel;
+    Buffer->BytesPerPixel = 4;
+    int BitmapMemorySize = (Buffer->Width * Buffer->Height) * Buffer->BytesPerPixel;
 
     // NOTE(Tejas): Virtual Alloc returns us Page of memory instead of the amount we asked for.
     //              so it cannot return memory less than the size of the Page. This is so that
     //              we can handle the memory allocation ourselves (Memory Pools)
-    BitmapMemory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+    Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+
+    Buffer->Pitch = Buffer->Width * Buffer->BytesPerPixel;
+
+    // TODO(Tejas): Is it better to return a newly created struct or editing struct in place using pointer?
 }
 
-internal void Win32UpdateWindow(HDC DeviceContext, RECT *ClientRect, int X, int Y, int Width, int Height) {
+// we dont make ClientRect as pointer because the compiler can inline this function.
+internal void Win32DisplayBufferInWindow(HDC DeviceContext, win32_offscreen_buffer Buffer,
+                                         int X, int Y, int WindowWidth, int WindowHeight) {
 
-    int WindowWidth  = ClientRect->right  - ClientRect->left;
-    int WindowHeight = ClientRect->bottom - ClientRect->top;
+    // NOTE(Tejas): Adjusting the Aspect Ratio
+
+
+
     StretchDIBits(DeviceContext,
                   // X, Y, Width, Height,
                   // X, Y, Width, Height,
-                  0, 0, BitmapWidth, BitmapHeight,
-                  0, 0, WindowWidth, WindowHeight,
-                  BitmapMemory,
-                  &BitmapInfo,
+                  X, Y, WindowWidth, WindowHeight,
+                  0, 0, Buffer.Width, Buffer.Height,
+                  Buffer.Memory,
+                  &Buffer.Info,
                   DIB_RGB_COLORS, SRCCOPY);
 }
 
@@ -89,41 +146,22 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
         // NOTE(Tejas): we size our bitmap to match the actual size of the window,
         //              but what we want to do in the future is render our game at a
         //              fixed resolution and accomodate the window somehow.
-        RECT ClientRect;
-        GetClientRect(Window, &ClientRect);
-        LONG Width  = ClientRect.right - ClientRect.left;
-        LONG Height = ClientRect.bottom - ClientRect.top;
-        Win32ResizeDIBSection(Width, Height); 
+        // win32_window_dimention Dimentions = Win32GetWindowDimention(Window);
+        // Win32ResizeDIBSection(&GlobalBackbuffer, Dimentions.Width, Dimentions.Height); 
     } break;
 
     case WM_KEYDOWN: {
-        const int velo = 100;
-        if ((char)wParam == 'W') YOFF += velo;
-        if ((char)wParam == 'S') YOFF -= velo;
-        if ((char)wParam == 'A') XOFF -= velo;
-        if ((char)wParam == 'D') XOFF += velo;
+        const int velo = 1;
+        if ((char)wParam == VK_UP) YOFF += velo;
+        if ((char)wParam == VK_DOWN) YOFF -= velo;
+        if ((char)wParam == VK_LEFT) XOFF -= velo;
+        if ((char)wParam == VK_RIGHT) XOFF += velo;
     } break;
 
     case WM_CLOSE:
     case WM_DESTROY : {
         Running = false;
     } break;
-
-    case WM_PAINT: {
-        PAINTSTRUCT ps;
-        HDC DeviceContext = BeginPaint(Window, &ps);
-
-        LONG X      = ps.rcPaint.left;
-        LONG Y      = ps.rcPaint.top;
-        LONG Width  = ps.rcPaint.right - ps.rcPaint.left;
-        LONG Height = ps.rcPaint.bottom - ps.rcPaint.top;
-
-        RECT ClientRect;
-        GetClientRect(Window, &ClientRect);
-        Win32UpdateWindow(DeviceContext, &ClientRect, X, Y, Width, Height);
-
-        EndPaint(Window, &ps);
-    }
 
     default: {
         result = DefWindowProc(Window, msg, wParam, lParam);
@@ -135,9 +173,6 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
 }
 
 int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-
-    int wnd_width  = 1000;
-    int wnd_height = 800;
 
     const char* wnd_name = "Handmade-Hero";
 
@@ -151,10 +186,12 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
         
         HWND Window = CreateWindowExA(0, wc.lpszClassName, wnd_name,
                                     WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                                    (int)wnd_width, (int)wnd_height,
+                                    CW_USEDEFAULT, CW_USEDEFAULT,
                                     NULL, NULL, hInstance, NULL);
 
         if (Window) {
+
+            Win32ResizeDIBSection(&GlobalBackbuffer, 1200, 720); 
 
             ShowWindow(Window, nCmdShow);
 
@@ -172,16 +209,16 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                     DispatchMessage(&msg);
                 }
 
-                RenderGradient(XOFF, YOFF);
+                RenderGradient(&GlobalBackbuffer, XOFF, YOFF);
 
                 HDC DeviceContext = GetDC(Window);
-                RECT ClientRect;
-                GetClientRect(Window, &ClientRect);
-                int WindowWidth = ClientRect.right - ClientRect.left;
-                int WindowHeight = ClientRect.bottom - ClientRect.top;
-                Win32UpdateWindow(DeviceContext, &ClientRect, 0, 0, WindowWidth, WindowHeight);
+
+                win32_window_dimention Dimentions = Win32GetWindowDimention(Window);
+                Win32DisplayBufferInWindow(DeviceContext, GlobalBackbuffer, 0, 0, Dimentions.Width, Dimentions.Height);
 
                 ReleaseDC(Window, DeviceContext);
+
+                XOFF++; YOFF--;
             }
             
         } else {
