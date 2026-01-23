@@ -27,7 +27,7 @@ struct win32_window_dimention {
 global bool GlobalRunning;
 global win32_offscreen_buffer GlobalBackbuffer;
 
-global unsigned int XOFF, YOFF;
+global LPDIRECTSOUNDBUFFER GlobalSecondaryBuffer;
 
 // NOTE(Tejas): We Load the XInput and DirectSound DLL ourselves so that we know it exists.
 //              if it does not exist, then we can just ignore it so the user
@@ -81,6 +81,8 @@ internal void Win32LoadXInput(void) {
 
 internal void Win32InitDSound(HWND Window, int32_t SamplesPerSecond, int32_t BufferSize) {
 
+    // NOTE(Tejas): DSound uses Object Oriented COM := Component Object Model
+
     HMODULE DSoundLibrary = LoadLibraryA("dsound.dll");
 
     if (DSoundLibrary) {
@@ -132,8 +134,7 @@ internal void Win32InitDSound(HWND Window, int32_t SamplesPerSecond, int32_t Buf
             BufferDesc.dwBufferBytes = BufferSize;
             BufferDesc.lpwfxFormat = &WaveFormat;
 
-            LPDIRECTSOUNDBUFFER SecondaryBuffer;
-            if (SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDesc, &SecondaryBuffer, 0))) {
+            if (SUCCEEDED(DirectSound->CreateSoundBuffer(&BufferDesc, &GlobalSecondaryBuffer, 0))) {
 
                 int flag = 4 + 8;
                 OutputDebugStringA("Secondary BUffer Created\n");
@@ -255,11 +256,6 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
     case WM_CHAR:
     case WM_KEYUP:
     case WM_KEYDOWN: {
-        const int velo = 5;
-        if ((char)wParam == 'W') YOFF += velo;
-        if ((char)wParam == 'S') YOFF -= velo;
-        if ((char)wParam == 'D') XOFF -= velo;
-        if ((char)wParam == 'A') XOFF += velo;
     } break;
 
     case WM_CLOSE:
@@ -315,12 +311,23 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
             ShowWindow(Window, nCmdShow);
 
-            Win32InitDSound(Window, 48000, 48000*sizeof(int16_t)*2);
-
-
             // NOTE(Tejas): if you specift the CS_OWNDC flag you can use the same DC over and over.
             //              This means, this line will only be called once at the start of the loop
             HDC DeviceContext = GetDC(Window);
+
+            int XOFF, YOFF;
+
+            int ToneHz = 256;
+            int ToneVolume = 2000;
+            uint32_t RunningSampleIndex = 0;
+            int SamplesPerSecond = 48000;
+            int SquareWavePeriod = SamplesPerSecond / ToneHz;
+            int HalfSquareWavePeriod = SquareWavePeriod / 2;
+            int BytesPerSample = sizeof(int16_t) * 2;
+            int SecondaryBufferSize = SamplesPerSecond * BytesPerSample;
+            bool SoundIsPlaying = false;
+
+            Win32InitDSound(Window, SamplesPerSecond, SecondaryBufferSize);
 
             GlobalRunning = true;
             while (GlobalRunning) {
@@ -419,6 +426,58 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
                 RenderGradient(&GlobalBackbuffer, XOFF, YOFF);
 
+
+                DWORD PlayCursor, WriteCursor;
+
+                if (SUCCEEDED(GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor))) {
+
+                    DWORD ByteToLock = RunningSampleIndex * BytesPerSample % SecondaryBufferSize;
+                    DWORD BytesToWrite = 0;
+
+                    if (ByteToLock == PlayCursor) {
+                        BytesToWrite = SecondaryBufferSize;
+                    }
+                    else if (ByteToLock > PlayCursor) {
+                        BytesToWrite = SecondaryBufferSize - ByteToLock;
+                        BytesToWrite += PlayCursor;
+                    } else {
+                        BytesToWrite += PlayCursor - ByteToLock;
+                    }
+
+                    VOID *Region1;
+                    DWORD Region1Size;
+                    VOID *Region2;
+                    DWORD Region2Size;
+
+                    GlobalSecondaryBuffer->Lock(ByteToLock, BytesToWrite,
+                                                &Region1, &Region1Size,
+                                                &Region2, &Region2Size, 0);
+                    // TODO(Tejas): Check if Region1Size and Region2Size are valid...
+
+                    int16_t *SampleOut = (int16_t*)Region1;
+                    DWORD Region1SampleCount = Region1Size / BytesPerSample;
+                    for (DWORD SampleIndex = 0; SampleIndex < Region1SampleCount; SampleIndex++) {
+                        int16_t SampleValue = ((RunningSampleIndex++ / HalfSquareWavePeriod) % 2) ? ToneVolume : -ToneVolume;
+                        *SampleOut++ = SampleValue;
+                        *SampleOut++ = SampleValue;
+                    }
+
+                    DWORD Region2SampleCount = Region2Size / BytesPerSample;
+                    SampleOut = (int16_t*)Region2;
+                    for (DWORD SampleIndex = 0; SampleIndex < Region2SampleCount; SampleIndex++) {
+                        int16_t SampleValue = ((RunningSampleIndex++ / HalfSquareWavePeriod) % 2) ? ToneVolume : -ToneVolume;
+                        *SampleOut++ = SampleValue;
+                        *SampleOut++ = SampleValue;
+                    }
+
+                    GlobalSecondaryBuffer->Unlock(Region1, Region1Size, Region2, Region2Size);
+
+                }
+
+                if (!SoundIsPlaying) {
+                    SoundIsPlaying = true;
+                    GlobalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
+                }
                 win32_window_dimention Dimentions = Win32GetWindowDimention(Window);
                 Win32DisplayBufferInWindow(DeviceContext, GlobalBackbuffer, 20, 20, Dimentions.Width, Dimentions.Height);
             }
