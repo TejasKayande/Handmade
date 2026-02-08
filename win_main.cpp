@@ -6,6 +6,8 @@
 #include <xinput.h>
 #include <dsound.h>
 
+#include <stdio.h>
+
 #define local static 
 #define global static 
 #define internal static 
@@ -339,20 +341,26 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
 
 int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
 
-    const char* wnd_name = "Handmade-Hero";
+    // NOTE(Tejas): This we need to only compute once that will give us
+    //              how many counts happen per second
+    LARGE_INTEGER PerfCountFrequencyResult;
+    QueryPerformanceFrequency(&PerfCountFrequencyResult);
+
+    // NOTE(Tejas): Read MSDN for LARGE_INTEGER
+    int64_t PerfCountFrequency = PerfCountFrequencyResult.QuadPart;
 
     WNDCLASSA wc = { };
     wc.style         = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
     wc.lpfnWndProc   = Win32MainWindowCallBack;
     wc.hInstance     = hInstance;
-    wc.lpszClassName = wnd_name;
+    wc.lpszClassName = "Handmade-Hero";
 
     Win32LoadXInput();
     Win32ResizeDIBSection(&GlobalBackbuffer, 1200, 720); 
 
     if (RegisterClassA(&wc)) {
         
-        HWND Window = CreateWindowExA(0, wc.lpszClassName, wnd_name,
+        HWND Window = CreateWindowExA(0, wc.lpszClassName, wc.lpszClassName,
                                     WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                                     CW_USEDEFAULT, CW_USEDEFAULT,
                                     NULL, NULL, hInstance, NULL);
@@ -380,6 +388,12 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
             Win32FillSoundBuffer(&SoundOutput, 0, SoundOutput.SecondaryBufferSize);
             GlobalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
+
+            // NOTE(Tejas): Get the Clock time
+            LARGE_INTEGER LastCounter;
+            QueryPerformanceCounter(&LastCounter);
+
+            uint64_t LastCycleCount = __rdtsc();
 
             GlobalRunning = true;
             while (GlobalRunning) {
@@ -498,6 +512,30 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
                 win32_window_dimention Dimentions = Win32GetWindowDimention(Window);
                 Win32DisplayBufferInWindow(DeviceContext, GlobalBackbuffer, 20, 20, Dimentions.Width, Dimentions.Height);
+
+                // NOTE(Tejas): Counting Time Elapsed
+
+                // NOTE(Tejas): This returns the processor time stamps. This returns the number of clock cycles
+                //              since the last reset. (Read MSDN for __rdtsc)
+                uint64_t EndCycleCount = __rdtsc();
+
+                LARGE_INTEGER EndCounter;
+                QueryPerformanceCounter(&EndCounter);
+
+                // NOTE(Tejas): Counting FrameTime.
+                int64_t CyclesElaspsed = EndCycleCount - LastCycleCount;
+                int64_t CounterElapsed = EndCounter.QuadPart - LastCounter.QuadPart;
+                float MiliSeconds = (float)(1000*CounterElapsed)/ (float)PerfCountFrequency;
+                float FPS = (float)PerfCountFrequency / (float)CounterElapsed;
+                float MegaCyclesPerFramce = (float)(CyclesElaspsed / (float)(1000 * 1000));
+
+                // FIXME(Tejas): This is Unsafe and needs to be replaced!
+                char Buffer[256] = {};
+                sprintf(Buffer, "%.2fms/f, %.2ff/s, %.2fmc/f\n", MiliSeconds, FPS, MegaCyclesPerFramce);
+                OutputDebugStringA(Buffer);
+
+                LastCounter    = EndCounter;
+                LastCycleCount = EndCycleCount;
             }
             
         } else {
