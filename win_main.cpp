@@ -8,11 +8,32 @@
 
 #include <stdio.h>
 
+#include "handmade.cpp"
+
+/*
+    TODO(Tejas):
+    - Saved game locations
+    - Getting a handle to our own executable file
+    - Asset loading path
+    - Threading (launch a thread)
+    - Raw Input (support for multiple keyboards)
+    - Sleep/timeBeginPeriod
+    - ClipCursor (for multimonitor support)
+    - Fullscreen support
+    - WM_SETCURSOR (control cursor visibility)
+    - QueryCancelAutoplay (disable autoruns)
+    - WM_ACTIVATEAPP (we are not the active application)
+    - Blit speed improvements
+    - Hardware acceleration (OpenGL or Direct3D or both)
+    - GetKeyboardLayout (for French keyboards, international WASD support)
+*/
+
+
 #define local static 
 #define global static 
 #define internal static 
 
-#define MATH_PI 3.14159265359
+#define MATH_PI 3.14159265359f
 
 struct win32_offscreen_buffer {
     BITMAPINFO Info;
@@ -308,6 +329,34 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
     case WM_CHAR:
     case WM_KEYUP:
     case WM_KEYDOWN: {
+        uint32_t VKCode = wParam;
+        bool WasDown = ((lParam & (1 << 30)) != 0);
+        bool IsDown = ((lParam & (1 << 31)) == 0);
+        bool AltKeyWasDown = (lParam & (1 << 29));
+
+        switch (VKCode) {
+            case 'W': {
+                OutputDebugStringA("W Key\n");
+            } break;
+
+            case 'A': {
+                OutputDebugStringA("A Key\n");
+            } break;
+
+            case 'S': {
+                OutputDebugStringA("S Key\n");
+            } break;
+
+            case 'D': {
+                OutputDebugStringA("D Key\n");
+            } break;
+
+            default: {
+                char Buffer[256];
+                sprintf(Buffer, "Key: %d\n", VKCode);
+                OutputDebugStringA(Buffer);
+            } break;
+        }
     } break;
 
     case WM_CLOSE:
@@ -339,6 +388,12 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
     return result;
 }
 
+// NOTE(Tejas): We could add #ifs for platform specific code here like:
+//              #if _WIN32
+//                do windows specific stuff
+//              #elif __linux__
+//                do linux specific stuff
+//              But this forces the control flow of every platform code to be the same.
 int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
 
     // NOTE(Tejas): This we need to only compute once that will give us
@@ -443,7 +498,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         // TODO(Tejas): I dont know how the values are calculate for the stick movement
                         int16_t StickX = Pad->sThumbLX;
                         int16_t StickY = Pad->sThumbLY;
-
+                        
                         int velo = 10;
                         if (Up)    YOFF -= velo;
                         if (Down)  YOFF += velo;
@@ -490,7 +545,13 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                     }
                 }
 
-                RenderGradient(&GlobalBackbuffer, XOFF, YOFF);
+                game_offscreen_buffer GameBuffer;
+                GameBuffer.Memory = GlobalBackbuffer.Memory;
+                GameBuffer.Width  = GlobalBackbuffer.Width;
+                GameBuffer.Height = GlobalBackbuffer.Height;
+                GameBuffer.Pitch  = GlobalBackbuffer.Pitch;
+                GameUpdateAndRender(&GameBuffer, XOFF, YOFF);
+                // RenderGradient(&GlobalBackbuffer, XOFF, YOFF);
 
                 // NOTE(Tejas): Sound Stuff....
                 DWORD PlayCursor, WriteCursor;
@@ -527,12 +588,14 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 int64_t CounterElapsed = EndCounter.QuadPart - LastCounter.QuadPart;
                 float MiliSeconds = (float)(1000*CounterElapsed)/ (float)PerfCountFrequency;
                 float FPS = (float)PerfCountFrequency / (float)CounterElapsed;
-                float MegaCyclesPerFramce = (float)(CyclesElaspsed / (float)(1000 * 1000));
+                float MegaCyclesPerFrame = (float)(CyclesElaspsed / (float)(1000 * 1000));
 
+#if 0
                 // FIXME(Tejas): This is Unsafe and needs to be replaced!
                 char Buffer[256] = {};
-                sprintf(Buffer, "%.2fms/f, %.2ff/s, %.2fmc/f\n", MiliSeconds, FPS, MegaCyclesPerFramce);
+                sprintf(Buffer, "%.2fms/f, %.2ff/s, %.2fmc/f\n", MiliSeconds, FPS, MegaCyclesPerFrame);
                 OutputDebugStringA(Buffer);
+#endif
 
                 LastCounter    = EndCounter;
                 LastCycleCount = EndCycleCount;
