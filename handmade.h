@@ -23,7 +23,14 @@ struct game_offscreen_buffer {
     int     Height;
     int     Pitch;
 };
-void GameUpdateAndRender(game_offscreen_buffer *Buffer, int XOffset, int YOffset);
+
+struct game_sound_output_buffer {
+    int      SamplesPerSecond;
+    int      SampleCount;
+    int16_t *Samples;
+};
+
+void GameUpdateAndRender(game_offscreen_buffer *Buffer, game_sound_output_buffer *SoundBuffer, int XOffset, int YOffset);
 
 #define HANDMADE_H
 #endif

@@ -8,7 +8,15 @@
 
 #include <stdio.h>
 
+#define local static 
+#define global static 
+#define internal static 
+
+#define MATH_PI 3.14159265359f
+
 #include "handmade.cpp"
+
+#include "win32_handmade.h"
 
 /*
     TODO(Tejas):
@@ -27,37 +35,6 @@
     - Hardware acceleration (OpenGL or Direct3D or both)
     - GetKeyboardLayout (for French keyboards, international WASD support)
 */
-
-
-#define local static 
-#define global static 
-#define internal static 
-
-#define MATH_PI 3.14159265359f
-
-struct win32_offscreen_buffer {
-    BITMAPINFO Info;
-    void      *Memory;
-    int        Width;
-    int        Height;
-    int        BytesPerPixel;
-    int        Pitch;
-};
-
-struct win32_sound_output {
-    int      ToneHz;
-    int      ToneVolume;
-    uint32_t RunningSampleIndex;
-    int      SamplesPerSecond;
-    int      WavePeriod;
-    int      BytesPerSample;
-    int      SecondaryBufferSize;
-};
-
-struct win32_window_dimention {
-    int Width;
-    int Height;
-};
 
 global bool GlobalRunning;
 global win32_offscreen_buffer GlobalBackbuffer;
@@ -159,6 +136,7 @@ internal void Win32InitDSound(HWND Window, int32_t SamplesPerSecond, int32_t Buf
                 }
                 
             } else {
+
                 // TODO(Tejas): Couldnt set the Cooperative Level, Handle Error...
             }
 
@@ -188,8 +166,33 @@ internal void Win32InitDSound(HWND Window, int32_t SamplesPerSecond, int32_t Buf
     }
 }
 
+internal void Win32ClearSoundBuffer(win32_sound_output *SoundOutput) {
+
+    VOID *Region1;
+    DWORD Region1Size;
+    VOID *Region2;
+    DWORD Region2Size;
+
+    GlobalSecondaryBuffer->Lock(0, SoundOutput->SecondaryBufferSize,
+                                &Region1, &Region1Size,
+                                &Region2, &Region2Size, 0);
+
+    uint8_t *DestByte = (uint8_t*)Region1;
+    for (DWORD ByteIndex = 0; ByteIndex < Region1Size; ByteIndex++) {
+        *DestByte++ = 0;
+    }
+
+    DestByte = (uint8_t*)Region2;
+    for (DWORD ByteIndex = 0; ByteIndex < Region2Size; ByteIndex++) {
+        *DestByte++ = 0;
+    }
+
+    GlobalSecondaryBuffer->Unlock(Region1, Region1Size, Region2, Region2Size);
+}
+
 internal void Win32FillSoundBuffer(win32_sound_output *SoundOutput,
-                                   DWORD ByteToLock, DWORD BytesToWrite) {
+                                   DWORD ByteToLock, DWORD BytesToWrite,
+                                   game_sound_output_buffer *SoundBuffer) {
 
     VOID *Region1;
     DWORD Region1Size;
@@ -201,25 +204,20 @@ internal void Win32FillSoundBuffer(win32_sound_output *SoundOutput,
                                 &Region2, &Region2Size, 0);
     // TODO(Tejas): Check if Region1Size and Region2Size are valid...
 
-    int16_t *SampleOut = (int16_t*)Region1;
     DWORD Region1SampleCount = Region1Size / SoundOutput->BytesPerSample;
+    int16_t *DestSample   = (int16_t*)Region1;
+    int16_t *SourceSample = SoundBuffer->Samples;
     for (DWORD SampleIndex = 0; SampleIndex < Region1SampleCount; SampleIndex++) {
-        float t = 2.0f * (float)MATH_PI * (float)SoundOutput->RunningSampleIndex / (float)SoundOutput->WavePeriod;
-        float SineValue = 1.0f * sinf(t);
-        int16_t SampleValue = (int16_t) (SineValue * SoundOutput->ToneVolume);
-        *SampleOut++ = SampleValue;
-        *SampleOut++ = SampleValue;
+        *DestSample++ = *SourceSample++;
+        *DestSample++ = *SourceSample++;
         SoundOutput->RunningSampleIndex++;
     }
 
     DWORD Region2SampleCount = Region2Size / SoundOutput->BytesPerSample;
-    SampleOut = (int16_t*)Region2;
+    DestSample = (int16_t*)Region2;
     for (DWORD SampleIndex = 0; SampleIndex < Region2SampleCount; SampleIndex++) {
-        float t = 2.0f * (float)MATH_PI * (float)SoundOutput->RunningSampleIndex / (float)SoundOutput->WavePeriod;
-        float SineValue = 1.0f * sinf(t);
-        int16_t SampleValue = (int16_t) (SineValue * SoundOutput->ToneVolume);
-        *SampleOut++ = SampleValue;
-        *SampleOut++ = SampleValue;
+        *DestSample++ = *SourceSample++;
+        *DestSample++ = *SourceSample++;
         SoundOutput->RunningSampleIndex++;
     }
 
@@ -236,29 +234,6 @@ internal win32_window_dimention Win32GetWindowDimention(HWND Window) {
     Result.Height = ClientRect.bottom - ClientRect.top;
 
     return Result;
-}
-
-internal void RenderGradient(win32_offscreen_buffer *Buffer, int XOffset, int YOffset) {
-
-    // TODO(Tejas): What is better pass by reference or pass by value?
-
-    uint8_t *Row = (uint8_t*) Buffer->Memory;
-
-    for (int Y = 0; Y < Buffer->Height; Y++) {
-
-        uint32_t *Pixel = (uint32_t*) Row;
-
-        for (int X = 0; X < Buffer->Width; X++) {
-            // AA RR GG BB 
-
-            uint8_t Blue = (X + XOffset);
-            uint8_t Green = (Y + YOffset);
-
-            *Pixel++ = (Green << 8) | Blue;
-        }
-
-        Row += Buffer->Pitch;
-    }
 }
 
 // NOTE(Tejas): DIB := Device Independent Bitmap
@@ -334,29 +309,7 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
         bool IsDown = ((lParam & (1 << 31)) == 0);
         bool AltKeyWasDown = (lParam & (1 << 29));
 
-        switch (VKCode) {
-            case 'W': {
-                OutputDebugStringA("W Key\n");
-            } break;
-
-            case 'A': {
-                OutputDebugStringA("A Key\n");
-            } break;
-
-            case 'S': {
-                OutputDebugStringA("S Key\n");
-            } break;
-
-            case 'D': {
-                OutputDebugStringA("D Key\n");
-            } break;
-
-            default: {
-                char Buffer[256];
-                sprintf(Buffer, "Key: %d\n", VKCode);
-                OutputDebugStringA(Buffer);
-            } break;
-        }
+        int Velo = 30;
     } break;
 
     case WM_CLOSE:
@@ -428,21 +381,18 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             //              This means, this line will only be called once at the start of the loop
             HDC DeviceContext = GetDC(Window);
 
-            int XOFF, YOFF;
-
             win32_sound_output SoundOutput = { };
-            SoundOutput.ToneHz = 256;
-            SoundOutput.ToneVolume = 5000;
             SoundOutput.RunningSampleIndex = 0;
             SoundOutput.SamplesPerSecond = 48000;
-            SoundOutput.WavePeriod = SoundOutput.SamplesPerSecond / SoundOutput.ToneHz;
             SoundOutput.BytesPerSample = sizeof(int16_t) * 2;
             SoundOutput.SecondaryBufferSize = SoundOutput.SamplesPerSecond * SoundOutput.BytesPerSample;
 
             Win32InitDSound(Window, SoundOutput.SamplesPerSecond, SoundOutput.SecondaryBufferSize);
 
-            Win32FillSoundBuffer(&SoundOutput, 0, SoundOutput.SecondaryBufferSize);
+            Win32ClearSoundBuffer(&SoundOutput);
             GlobalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
+
+            int16_t *Samples = (int16_t*)VirtualAlloc(0, SoundOutput.SecondaryBufferSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
             // NOTE(Tejas): Get the Clock time
             LARGE_INTEGER LastCounter;
@@ -498,12 +448,6 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         // TODO(Tejas): I dont know how the values are calculate for the stick movement
                         int16_t StickX = Pad->sThumbLX;
                         int16_t StickY = Pad->sThumbLY;
-                        
-                        int velo = 10;
-                        if (Up)    YOFF -= velo;
-                        if (Down)  YOFF += velo;
-                        if (Right) XOFF += velo;
-                        if (Left)  XOFF -= velo;
 
                         const float MAX_STICK = 32767.0f;
                         const float DEADZONE = 0.1f;
@@ -524,9 +468,6 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         WORD leftMotor  = (WORD)(absX * 5000.0f);
                         WORD rightMotor = (WORD)(absY * 5000.0f);
 
-                        XOFF += leftMotor % 20;
-                        YOFF += rightMotor % 20;
-
                         XINPUT_VIBRATION InputVibration = {};
                         InputVibration.wLeftMotorSpeed  = leftMotor;
                         InputVibration.wRightMotorSpeed = rightMotor;
@@ -545,21 +486,13 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                     }
                 }
 
-                game_offscreen_buffer GameBuffer;
-                GameBuffer.Memory = GlobalBackbuffer.Memory;
-                GameBuffer.Width  = GlobalBackbuffer.Width;
-                GameBuffer.Height = GlobalBackbuffer.Height;
-                GameBuffer.Pitch  = GlobalBackbuffer.Pitch;
-                GameUpdateAndRender(&GameBuffer, XOFF, YOFF);
-                // RenderGradient(&GlobalBackbuffer, XOFF, YOFF);
-
-                // NOTE(Tejas): Sound Stuff....
                 DWORD PlayCursor, WriteCursor;
-
+                DWORD ByteToLock;
+                DWORD BytesToWrite;
+                bool SoundIsValid = false;
                 if (SUCCEEDED(GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor))) {
 
-                    DWORD ByteToLock = (SoundOutput.RunningSampleIndex * SoundOutput.BytesPerSample) % SoundOutput.SecondaryBufferSize;
-                    DWORD BytesToWrite;
+                    ByteToLock = (SoundOutput.RunningSampleIndex * SoundOutput.BytesPerSample) % SoundOutput.SecondaryBufferSize;
 
                     if (ByteToLock > PlayCursor) {
                         BytesToWrite = (SoundOutput.SecondaryBufferSize - ByteToLock);
@@ -568,7 +501,24 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         BytesToWrite = PlayCursor - ByteToLock;
                     }
 
-                    Win32FillSoundBuffer(&SoundOutput, ByteToLock, BytesToWrite);
+                    SoundIsValid = true;
+                }
+
+                game_sound_output_buffer SoundBuffer = { };
+                SoundBuffer.SamplesPerSecond = SoundOutput.SamplesPerSecond;
+                SoundBuffer.SampleCount = BytesToWrite / SoundOutput.BytesPerSample;
+                SoundBuffer.Samples = Samples;
+
+                game_offscreen_buffer GameBuffer = { };
+                GameBuffer.Memory = GlobalBackbuffer.Memory;
+                GameBuffer.Width  = GlobalBackbuffer.Width;
+                GameBuffer.Height = GlobalBackbuffer.Height;
+                GameBuffer.Pitch  = GlobalBackbuffer.Pitch;
+
+                GameUpdateAndRender(&GameBuffer, &SoundBuffer);
+
+                if (SoundIsValid) {
+                    Win32FillSoundBuffer(&SoundOutput, ByteToLock, BytesToWrite, &SoundBuffer);
                 }
 
                 win32_window_dimention Dimentions = Win32GetWindowDimention(Window);
@@ -600,6 +550,8 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 LastCounter    = EndCounter;
                 LastCycleCount = EndCycleCount;
             }
+
+            VirtualFree(Samples, 0, MEM_RELEASE);
             
         } else {
             
