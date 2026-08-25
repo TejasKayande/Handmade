@@ -1,6 +1,10 @@
 
 #if !defined(HANDMADE_H)
 
+#define ArrayCount(Array) (sizeof(Array) / sizeof((Array)[0]))
+
+// TODO(Tejas): Swap, Min, Max... Macros???
+
 // NOTE(Tejas): There are 2 approaches you can take when seperating platform and game:
 
 // 1. Platform as a Service to the game:
@@ -30,7 +34,46 @@ struct game_sound_output_buffer {
     int16_t *Samples;
 };
 
-void GameUpdateAndRender(game_offscreen_buffer *Buffer, game_sound_output_buffer *SoundBuffer, int XOffset, int YOffset);
+struct game_button_state {
+    int HalfTransitionCount;
+    bool EndedDown;
+};
+
+struct game_controller_input {
+
+    bool IsAnalog;
+
+    float StartX;
+    float StartY;
+
+    float MinX;
+    float MinY;
+
+    float MaxX;
+    float MaxY;
+
+    float EndX;
+    float EndY;
+
+    union {
+        game_button_state Buttons[6];
+        struct {
+            game_button_state Up;
+            game_button_state Down;
+            game_button_state Left;
+            game_button_state Right;
+
+            game_button_state LeftShoulder;
+            game_button_state RightShoulder;
+        };
+    };
+};
+
+struct game_input {
+    game_controller_input Controllers[4];
+};
+
+void GameUpdateAndRender(game_offscreen_buffer *Buffer, game_sound_output_buffer *SoundBuffer, game_input *Input);
 
 #define HANDMADE_H
 #endif

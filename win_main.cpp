@@ -283,6 +283,14 @@ internal void Win32DisplayBufferInWindow(HDC DeviceContext, win32_offscreen_buff
                   DIB_RGB_COLORS, SRCCOPY);
 }
 
+internal void Win32ProcessXInputDigitalButton(DWORD XInputButtonState, 
+                                              game_button_state *OldState, game_button_state *NewState, 
+                                              DWORD ButtonBit) {
+
+    NewState->EndedDown = (XInputButtonState & ButtonBit) == ButtonBit;
+    NewState->HalfTransitionCount = (OldState->EndedDown != NewState->EndedDown) ? 1 : 0;
+}
+
 internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wParam, LPARAM lParam) {
 
     LRESULT result = 0;
@@ -403,6 +411,10 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             GlobalRunning = true;
             while (GlobalRunning) {
 
+                game_input Input[2] = { };
+                game_input *NewInput = &Input[0];
+                game_input *OldInput = &Input[1];
+
                 MSG msg = { };
                 while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) {
 
@@ -418,9 +430,17 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 //              connected controller. We have to only check input for the controllers that
                 //              we know are connected.
 
+                // NOTE(Tejas): We are not going to think too much about Controller Input, we will just use Keyboard.
                 // NOTE(Tejas): Controller Input (XUSER_MAX_COUNT := 4)
                 // TODO(Tejas): Should we poll this more frequently
-                for (DWORD ControllerIndex = 0; ControllerIndex < XUSER_MAX_COUNT; ControllerIndex++) {
+
+                int MaxControllerCount = XUSER_MAX_COUNT;
+                if (MaxControllerCount > ArrayCount(NewInput->Controllers)) MaxControllerCount = ArrayCount(NewInput->Controllers);
+                
+                for (DWORD ControllerIndex = 0; ControllerIndex < MaxControllerCount; ControllerIndex++) {
+
+                    game_controller_input *OldController = &OldInput->Controllers[ControllerIndex];
+                    game_controller_input *NewController = &NewInput->Controllers[ControllerIndex];
 
                     XINPUT_STATE ControllerState;
                     if (XInputGetState(ControllerIndex, &ControllerState) == ERROR_SUCCESS) {
@@ -449,36 +469,62 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         int16_t StickX = Pad->sThumbLX;
                         int16_t StickY = Pad->sThumbLY;
 
-                        const float MAX_STICK = 32767.0f;
-                        const float DEADZONE = 0.1f;
-                        const float OFFSET_SPEED = 5.0f;
+                        // TODO(Tejas): Do DeadZone Processing
 
-                        float normX = StickX / MAX_STICK;
-                        float normY = StickY / MAX_STICK;
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->Down, &NewController->Down,
+                                                         XINPUT_GAMEPAD_A);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->Right, &NewController->Right,
+                                                        XINPUT_GAMEPAD_B);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->Left, &NewController->Left,
+                                                        XINPUT_GAMEPAD_X);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->Up, &NewController->Up,
+                                                        XINPUT_GAMEPAD_Y);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->LeftShoulder, &NewController->LeftShoulder,
+                                                        XINPUT_GAMEPAD_LEFT_SHOULDER);
+                        Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                        &OldController->RightShoulder, &NewController->RightShoulder,
+                                                        XINPUT_GAMEPAD_RIGHT_SHOULDER);
+                        
 
-                        if (fabsf(normX) < DEADZONE) normX = 0.0f;
-                        if (fabsf(normY) < DEADZONE) normY = 0.0f;
+                        { // NOTE(Tejas): Exp code to test vibrations
 
-                        normX = fminf(fmaxf(normX, -1.0f), 1.0f);
-                        normY = fminf(fmaxf(normY, -1.0f), 1.0f);
+                            // const float MAX_STICK = 32767.0f;
+                            // const float DEADZONE = 0.1f;
+                            // const float OFFSET_SPEED = 5.0f;
 
-                        float absX = fabsf(normX);
-                        float absY = fabsf(normY);
+                            // float normX = StickX / MAX_STICK;
+                            // float normY = StickY / MAX_STICK;
 
-                        WORD leftMotor  = (WORD)(absX * 5000.0f);
-                        WORD rightMotor = (WORD)(absY * 5000.0f);
+                            // if (fabsf(normX) < DEADZONE) normX = 0.0f;
+                            // if (fabsf(normY) < DEADZONE) normY = 0.0f;
 
-                        XINPUT_VIBRATION InputVibration = {};
-                        InputVibration.wLeftMotorSpeed  = leftMotor;
-                        InputVibration.wRightMotorSpeed = rightMotor;
+                            // normX = fminf(fmaxf(normX, -1.0f), 1.0f);
+                            // normY = fminf(fmaxf(normY, -1.0f), 1.0f);
 
-                        XInputSetState(ControllerIndex, &InputVibration);
+                            // float absX = fabsf(normX);
+                            // float absY = fabsf(normY);
+
+                            // WORD leftMotor  = (WORD)(absX * 5000.0f);
+                            // WORD rightMotor = (WORD)(absY * 5000.0f);
+
+                            // XINPUT_VIBRATION InputVibration = {};
+                            // InputVibration.wLeftMotorSpeed  = leftMotor;
+                            // InputVibration.wRightMotorSpeed = rightMotor;
+
+                            // XInputSetState(ControllerIndex, &InputVibration);
+
+                            // XINPUT_VIBRATION InputVibration = { };
+                            // if (Left || RIGHT) InputVibration.wLeftMotorSpeed  = 100;
+                            // if (Up || Down)    InputVibration.wRightMotorSpeed = 100;
+                            // XInputSetState(ControllerIndex, &InputVibration);
+                        }
 
 
-                        // XINPUT_VIBRATION InputVibration = { };
-                        // if (Left || RIGHT) InputVibration.wLeftMotorSpeed  = 100;
-                        // if (Up || Down)    InputVibration.wRightMotorSpeed = 100;
-                        // XInputSetState(ControllerIndex, &InputVibration);
 
                     } else {
 
@@ -515,7 +561,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 GameBuffer.Height = GlobalBackbuffer.Height;
                 GameBuffer.Pitch  = GlobalBackbuffer.Pitch;
 
-                GameUpdateAndRender(&GameBuffer, &SoundBuffer);
+                GameUpdateAndRender(&GameBuffer, &SoundBuffer, NewInput);
 
                 if (SoundIsValid) {
                     Win32FillSoundBuffer(&SoundOutput, ByteToLock, BytesToWrite, &SoundBuffer);
@@ -549,6 +595,11 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
                 LastCounter    = EndCounter;
                 LastCycleCount = EndCycleCount;
+
+                game_input *Temp = NewInput;
+                NewInput = OldInput;
+                OldInput = Temp;
+                // TODO(Tejas): Should we clear these?
             }
 
             VirtualFree(Samples, 0, MEM_RELEASE);
