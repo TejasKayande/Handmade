@@ -312,7 +312,7 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
     case WM_CHAR:
     case WM_KEYUP:
     case WM_KEYDOWN: {
-        uint32_t VKCode = wParam;
+        uint32_t VKCode = (uint32_t)wParam;
         bool WasDown = ((lParam & (1 << 30)) != 0);
         bool IsDown = ((lParam & (1 << 31)) == 0);
         bool AltKeyWasDown = (lParam & (1 << 29));
@@ -448,7 +448,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 // NOTE(Tejas): Controller Input (XUSER_MAX_COUNT := 4)
                 // TODO(Tejas): Should we poll this more frequently
 
-                int MaxControllerCount = XUSER_MAX_COUNT;
+                DWORD MaxControllerCount = XUSER_MAX_COUNT;
                 if (MaxControllerCount > ArrayCount(NewInput->Controllers)) MaxControllerCount = ArrayCount(NewInput->Controllers);
                 
                 for (DWORD ControllerIndex = 0; ControllerIndex < MaxControllerCount; ControllerIndex++) {
