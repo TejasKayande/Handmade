@@ -1,6 +1,29 @@
 
 #if !defined(HANDMADE_H)
 
+/*
+    NOTE(Tejas):
+
+    HANDMADE_INTERNAL:
+        0 - Build for public release
+        1 - Build for developer only
+
+    HANDMADE_SLOW:
+        0 - No slow code allowed!
+        1 - Slow code welcome.
+*/
+
+#if HANDMADE_SLOW 
+#define Assert(Expression) if(!(Expression)) {*(int *)0 = 0;}
+#else
+#define Assert(Expression)
+#endif
+
+#define Kilobytes(Value) ((Value) * 1024LL)
+#define Megabytes(Value) ((Value) * 1024LL * 1024LL)
+#define Gigabytes(Value) ((Value) * 1024LL * 1024LL * 1024LL)
+#define Terabytes(Value) ((Value) * 1024LL * 1024LL * 1024LL * 1024LL)
+
 #define ArrayCount(Array) (sizeof(Array) / sizeof((Array)[0]))
 
 // TODO(Tejas): Swap, Min, Max... Macros???
@@ -70,10 +93,28 @@ struct game_controller_input {
 };
 
 struct game_input {
+    // TODO(Tejas): Pass clock values here
     game_controller_input Controllers[4];
 };
 
-void GameUpdateAndRender(game_offscreen_buffer *Buffer, game_sound_output_buffer *SoundBuffer, game_input *Input);
+struct game_state {
+    int ToneHz;
+    int BlueOffset;
+    int GreenOffset;
+};
+
+struct game_memory {
+
+    bool IsInitialized;
+
+    uint64_t PermanentStorageSize;
+    void *PermanentStorage; // NOTE(Tejas): Required to be cleared to zero at startup
+
+    uint64_t TransientStorageSize;
+    void *TransientStorage; // NOTE(Tejas): Required to be cleared to zero at startup
+};
+
+void GameUpdateAndRender(game_memory *Memory, game_offscreen_buffer *Buffer, game_sound_output_buffer *SoundBuffer, game_input *Input);
 
 #define HANDMADE_H
 #endif

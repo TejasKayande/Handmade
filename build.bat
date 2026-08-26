@@ -7,7 +7,7 @@ if not exist "bin" (mkdir bin)
 
 pushd bin
 
-call cl /FC /EHsc /MP /Zi /W2 ../win_main.cpp User32.lib Gdi32.lib 
+call cl -DHANDMADE_SLOW=1 -DHANDMADE_INTERNAL=1 /FC /EHsc /MP /Zi /W2 ../win_main.cpp User32.lib Gdi32.lib 
 
 popd
 endlocal
