@@ -68,6 +68,74 @@ DIRECT_SOUND_CREATE(DirectSoundCreateStub) { return (DSERR_NODRIVER); }
 global direct_sound_create *DirectSoundCreate_ = DirectSoundCreateStub;
 #define DirectSoundCreate DirectSoundCreate_
 
+internal debug_read_file_result DEBUGPlatformReadEntireFile(char *Filename) {
+
+    debug_read_file_result Result = { };
+    HANDLE FileHandle = CreateFileA(Filename, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+
+    if (FileHandle != INVALID_HANDLE_VALUE) {
+
+        LARGE_INTEGER FileSize;
+        if (GetFileSizeEx(FileHandle, &FileSize)) {
+
+            // TODO(Tejas): Defines for max values
+            Result.ContentsSize = SafeTruncateUInt64(FileSize.QuadPart);
+            Result.Contents = VirtualAlloc(0, Result.ContentsSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+            if (Result.Contents) {
+                DWORD BytesRead;
+                if (ReadFile(FileHandle, Result.Contents, Result.ContentsSize, &BytesRead, 0) && (Result.ContentsSize == BytesRead)) {
+                    // NOTE(Tejas): File read successfully
+                } else {
+                    // TODO(Tejas): Logging failed read
+                    DEBUGPlatformFreeFileMemory(Result.Contents);
+                    Result.ContentsSize = 0;
+                    Result.Contents = 0;
+                }
+            } else {
+                // TODO(Tejas): Logging failed memory allocation
+            }
+        } else {
+            // TODO(Tejas): Logging failed file size
+        }
+
+        CloseHandle(FileHandle);
+    } else {
+        // TODO(Tejas): Logging failed file open
+    }
+
+    return Result;
+}
+
+internal void DEBUGPlatformFreeFileMemory(void *Memory) {
+
+    if (Memory) {
+        VirtualFree(Memory, 0, MEM_RELEASE);
+    }
+}
+
+internal bool DEBUGPlatformWriteEntireFile(char *Filename, uint32_t MemorySize, void *Memory) {
+
+    bool Result = false;
+
+    HANDLE FileHandle = CreateFileA(Filename, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0, 0);
+    if (FileHandle != INVALID_HANDLE_VALUE) {
+
+        DWORD BytesWritten;
+        if (WriteFile(FileHandle, Memory, MemorySize, &BytesWritten, 0)) { 
+            // NOTE(Tejas): File read successfully
+            Result = BytesWritten == MemorySize;
+        } else {
+            // TODO(Tejas): Logging failed read
+        }
+
+        CloseHandle(FileHandle);
+    } else {
+        // TODO(Tejas): Logging failed file open
+    }
+
+    return Result;
+}
+
 internal void Win32LoadXInput(void) {
 
     // NOTE(Tejas): Loding the XInput functions that we need form xinput.dll
@@ -312,6 +380,8 @@ internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wP
     case WM_CHAR:
     case WM_KEYUP:
     case WM_KEYDOWN: {
+
+        Assert(!"Keyboard input came in through a non-dispatch message!");
         uint32_t VKCode = (uint32_t)wParam;
         bool WasDown = ((lParam & (1 << 30)) != 0);
         bool IsDown = ((lParam & (1 << 31)) == 0);
@@ -436,8 +506,32 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         GlobalRunning = false;
                     }
 
-                    TranslateMessage(&msg);
-                    DispatchMessage(&msg);
+                    switch (msg.message) {
+                        // case WM_SYSKEYDOWN:
+                        // case WM_SYSKEYUP:
+                        case WM_KEYDOWN:
+                        case WM_KEYUP: {
+                            uint32_t VKCode = (uint32_t)msg.wParam;
+                            bool WasDown = ((msg.lParam & (1 << 30)) != 0);
+                            bool IsDown = ((msg.lParam & (1 << 31)) == 0);
+                            if (WasDown != IsDown) {
+                                if (VKCode == 'W') {
+                                    NewInput->Controllers[0].Up.EndedDown = IsDown;
+                                } else if (VKCode == 'A') {
+                                    NewInput->Controllers[0].Left.EndedDown = IsDown;
+                                } else if (VKCode == 'S') {
+                                    NewInput->Controllers[0].Down.EndedDown = IsDown;
+                                } else if (VKCode == 'D') {
+                                    NewInput->Controllers[0].Right.EndedDown = IsDown;
+                                }
+                            }
+                        } break;
+
+                        default: {
+                            TranslateMessage(&msg);
+                            DispatchMessage(&msg);
+                        } break;
+                    }
                 }
 
                 // NOTE(Tejas): XInputGetState will stall for a couple of miliseconds if it cant find a

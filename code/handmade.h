@@ -26,6 +26,24 @@
 
 #define ArrayCount(Array) (sizeof(Array) / sizeof((Array)[0]))
 
+inline int32_t SafeTruncateUInt64(uint64_t Value) {
+    Assert(Value <= 0xFFFFFFFF);
+    int32_t Result = (int32_t)Value;
+    return Result;
+}
+
+// NOTE(Tejas): Services that the platform layer provides to the game
+#if HANDMADE_INTERNAL
+// IMPORTANT(Tejas): These are not to be used in shipping code.
+struct debug_read_file_result {
+    uint32_t ContentsSize;
+    void *Contents;
+};
+internal debug_read_file_result DEBUGPlatformReadEntireFile(char *Filename);
+internal void DEBUGPlatformFreeFileMemory(void *Memory);
+internal bool DEBUGPlatformWriteEntireFile(char *Filename, uint32_t MemorySize, void *Memory);
+#endif
+
 // TODO(Tejas): Swap, Min, Max... Macros???
 
 // NOTE(Tejas): There are 2 approaches you can take when seperating platform and game:

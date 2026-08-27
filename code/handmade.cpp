@@ -50,6 +50,15 @@ void GameUpdateAndRender(game_memory *Memory, game_offscreen_buffer *Buffer, gam
 
     game_state *GameState = (game_state *)Memory->PermanentStorage;
     if (!Memory->IsInitialized) {
+
+        char *Filename = __FILE__;
+
+        debug_read_file_result ReadFileResult = DEBUGPlatformReadEntireFile(Filename);
+        if (ReadFileResult.Contents) {
+            DEBUGPlatformWriteEntireFile("./data/handmade_copy.txt", ReadFileResult.ContentsSize, ReadFileResult.Contents);
+            DEBUGPlatformFreeFileMemory(ReadFileResult.Contents);
+        }
+
         GameState->ToneHz = 256;
         Memory->IsInitialized = true;
     }
