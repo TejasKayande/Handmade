@@ -359,6 +359,67 @@ internal void Win32ProcessXInputDigitalButton(DWORD XInputButtonState,
     NewState->HalfTransitionCount = (OldState->EndedDown != NewState->EndedDown) ? 1 : 0;
 }
 
+internal void Win32ProcessKeyboardMessage(game_button_state *NewState, bool IsDown) {
+
+    NewState->EndedDown = IsDown;
+    NewState->HalfTransitionCount++;
+}
+
+internal void Win32ProcessPendingMessages(game_controller_input *KeyboardController) {
+
+    MSG msg;
+    while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) {
+
+        switch (msg.message) {
+
+            case WM_QUIT: {
+                GlobalRunning = false;
+            } break;
+
+            case WM_SYSKEYDOWN:
+            case WM_SYSKEYUP:
+            case WM_KEYDOWN:
+            case WM_KEYUP: {
+
+                uint32_t VKCode = (uint32_t)msg.wParam;
+                bool WasDown = ((msg.lParam & (1 << 30)) != 0);
+                bool IsDown = ((msg.lParam & (1 << 31)) == 0);
+                if (WasDown != IsDown) {
+                    if (VKCode == VK_UP || VKCode == 'W') {
+                        Win32ProcessKeyboardMessage(&KeyboardController->Up, IsDown);
+                    } else if (VKCode == VK_LEFT || VKCode == 'A') {
+                        Win32ProcessKeyboardMessage(&KeyboardController->Left, IsDown);
+                    } else if (VKCode == VK_DOWN || VKCode == 'S') {
+                        Win32ProcessKeyboardMessage(&KeyboardController->Down, IsDown);
+                    } else if (VKCode == VK_RIGHT || VKCode == 'D') {
+                        Win32ProcessKeyboardMessage(&KeyboardController->Right, IsDown);
+                    } else if (VKCode == 'E') {
+                        Win32ProcessKeyboardMessage(&KeyboardController->RightShoulder, IsDown);
+                    } else if (VKCode == 'Q') {
+                        Win32ProcessKeyboardMessage(&KeyboardController->LeftShoulder, IsDown);
+                    }
+
+                    if (VKCode == VK_ESCAPE) {
+                        GlobalRunning = false;
+                    }
+                }
+
+                bool AltKeyWasDown = (msg.lParam & (1 << 29));
+                if ((VKCode == VK_F4) && AltKeyWasDown) {
+                    GlobalRunning = false;
+                }
+
+            } break;
+
+            default: {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            } break;
+        }
+    }
+
+}
+
 internal LRESULT WINAPI Win32MainWindowCallBack(HWND Window, UINT msg, WPARAM wParam, LPARAM lParam) {
 
     LRESULT result = 0;
@@ -464,11 +525,11 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             SoundOutput.SamplesPerSecond = 48000;
             SoundOutput.BytesPerSample = sizeof(int16_t) * 2;
             SoundOutput.SecondaryBufferSize = SoundOutput.SamplesPerSecond * SoundOutput.BytesPerSample;
-
             Win32InitDSound(Window, SoundOutput.SamplesPerSecond, SoundOutput.SecondaryBufferSize);
-
             Win32ClearSoundBuffer(&SoundOutput);
             GlobalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
+
+            GlobalRunning = true;
 
             int16_t *Samples = (int16_t*)VirtualAlloc(0, SoundOutput.SecondaryBufferSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
@@ -477,6 +538,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 #else
             LPVOID BaseAddress = 0;
 #endif
+
             game_memory GameMemory = { };
 
             GameMemory.PermanentStorageSize = Megabytes(64);
@@ -486,229 +548,171 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             GameMemory.PermanentStorage = VirtualAlloc(BaseAddress, TotalSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
             GameMemory.TransientStorage = (uint8_t*)GameMemory.PermanentStorage + GameMemory.PermanentStorageSize;
 
-            // NOTE(Tejas): Get the Clock time
-            LARGE_INTEGER LastCounter;
-            QueryPerformanceCounter(&LastCounter);
-
-            uint64_t LastCycleCount = __rdtsc();
-
-            GlobalRunning = true;
-            while (GlobalRunning && Samples && GameMemory.PermanentStorage && GameMemory.TransientStorage) {
+            if (Samples && GameMemory.PermanentStorage && GameMemory.TransientStorage) {
 
                 game_input Input[2] = { };
                 game_input *NewInput = &Input[0];
                 game_input *OldInput = &Input[1];
 
-                MSG msg = { };
-                while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) {
+                // NOTE(Tejas): Get the Clock time
+                LARGE_INTEGER LastCounter;
+                QueryPerformanceCounter(&LastCounter);
 
-                    if (msg.message == WM_QUIT) {
-                        GlobalRunning = false;
+                uint64_t LastCycleCount = __rdtsc();
+
+                while (GlobalRunning) {
+
+                    // TODO(Tejas): Zeroing macro
+                    game_controller_input *KeyboardController = &NewInput->Controllers[0];
+                    game_controller_input ZeroController = { };
+                    *KeyboardController = ZeroController;
+
+                    Win32ProcessPendingMessages(KeyboardController);
+
+                    if (KeyboardController->Up.EndedDown) {
+                        OutputDebugStringA("UP IS DOWN\n");
                     }
 
-                    switch (msg.message) {
-                        // case WM_SYSKEYDOWN:
-                        // case WM_SYSKEYUP:
-                        case WM_KEYDOWN:
-                        case WM_KEYUP: {
-                            uint32_t VKCode = (uint32_t)msg.wParam;
-                            bool WasDown = ((msg.lParam & (1 << 30)) != 0);
-                            bool IsDown = ((msg.lParam & (1 << 31)) == 0);
-                            if (WasDown != IsDown) {
-                                if (VKCode == 'W') {
-                                    NewInput->Controllers[0].Up.EndedDown = IsDown;
-                                } else if (VKCode == 'A') {
-                                    NewInput->Controllers[0].Left.EndedDown = IsDown;
-                                } else if (VKCode == 'S') {
-                                    NewInput->Controllers[0].Down.EndedDown = IsDown;
-                                } else if (VKCode == 'D') {
-                                    NewInput->Controllers[0].Right.EndedDown = IsDown;
-                                }
-                            }
-                        } break;
+                    // NOTE(Tejas): XInputGetState will stall for a couple of miliseconds if it cant find a
+                    //              connected controller. We have to only check input for the controllers that
+                    //              we know are connected.
 
-                        default: {
-                            TranslateMessage(&msg);
-                            DispatchMessage(&msg);
-                        } break;
+                    // NOTE(Tejas): We are not going to think too much about Controller Input, we will just use Keyboard.
+                    // NOTE(Tejas): Controller Input (XUSER_MAX_COUNT := 4)
+                    // TODO(Tejas): Should we poll this more frequently
+
+                    DWORD MaxControllerCount = XUSER_MAX_COUNT;
+                    if (MaxControllerCount > ArrayCount(NewInput->Controllers)) MaxControllerCount = ArrayCount(NewInput->Controllers);
+
+                    for (DWORD ControllerIndex = 0; ControllerIndex < MaxControllerCount; ControllerIndex++) {
+
+                        game_controller_input *OldController = &OldInput->Controllers[ControllerIndex];
+                        game_controller_input *NewController = &NewInput->Controllers[ControllerIndex];
+
+                        XINPUT_STATE ControllerState;
+                        if (XInputGetState(ControllerIndex, &ControllerState) == ERROR_SUCCESS) {
+
+                            // NOTE(Tejas): See XINPUT_GAMEPAD Defination...
+
+                            XINPUT_GAMEPAD *Pad = &ControllerState.Gamepad;
+
+                            bool Up    = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
+                            bool Down  = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
+                            bool Left  = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+                            bool Right = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
+
+                            bool Start = (Pad->wButtons & XINPUT_GAMEPAD_START);
+                            bool Back  = (Pad->wButtons & XINPUT_GAMEPAD_BACK);
+
+                            bool LeftShoulder = (Pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
+                            bool RightShoulder = (Pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+
+                            bool AButton = (Pad->wButtons & XINPUT_GAMEPAD_A);
+                            bool BButton = (Pad->wButtons & XINPUT_GAMEPAD_B);
+                            bool XButton = (Pad->wButtons & XINPUT_GAMEPAD_X);
+                            bool YButton = (Pad->wButtons & XINPUT_GAMEPAD_Y);
+
+                            // TODO(Tejas): I dont know how the values are calculate for the stick movement
+                            int16_t StickX = Pad->sThumbLX;
+                            int16_t StickY = Pad->sThumbLY;
+
+                            // TODO(Tejas): Do DeadZone Processing
+
+                            Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                            &OldController->Down, &NewController->Down,
+                                                             XINPUT_GAMEPAD_A);
+                            Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                            &OldController->Right, &NewController->Right,
+                                                            XINPUT_GAMEPAD_B);
+                            Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                            &OldController->Left, &NewController->Left,
+                                                            XINPUT_GAMEPAD_X);
+                            Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                            &OldController->Up, &NewController->Up,
+                                                            XINPUT_GAMEPAD_Y);
+                            Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                            &OldController->LeftShoulder, &NewController->LeftShoulder,
+                                                            XINPUT_GAMEPAD_LEFT_SHOULDER);
+                            Win32ProcessXInputDigitalButton(Pad->wButtons,
+                                                            &OldController->RightShoulder, &NewController->RightShoulder,
+                                                            XINPUT_GAMEPAD_RIGHT_SHOULDER);
+                            
+                        } else {
+
+                            // NOTE(Tejas): Controller at this ControllerIndex is not plugged in.
+                        }
                     }
-                }
 
-                // NOTE(Tejas): XInputGetState will stall for a couple of miliseconds if it cant find a
-                //              connected controller. We have to only check input for the controllers that
-                //              we know are connected.
+                    DWORD PlayCursor, WriteCursor;
+                    DWORD ByteToLock;
+                    DWORD BytesToWrite;
+                    bool SoundIsValid = false;
+                    if (SUCCEEDED(GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor))) {
 
-                // NOTE(Tejas): We are not going to think too much about Controller Input, we will just use Keyboard.
-                // NOTE(Tejas): Controller Input (XUSER_MAX_COUNT := 4)
-                // TODO(Tejas): Should we poll this more frequently
+                        ByteToLock = (SoundOutput.RunningSampleIndex * SoundOutput.BytesPerSample) % SoundOutput.SecondaryBufferSize;
 
-                DWORD MaxControllerCount = XUSER_MAX_COUNT;
-                if (MaxControllerCount > ArrayCount(NewInput->Controllers)) MaxControllerCount = ArrayCount(NewInput->Controllers);
-                
-                for (DWORD ControllerIndex = 0; ControllerIndex < MaxControllerCount; ControllerIndex++) {
-
-                    game_controller_input *OldController = &OldInput->Controllers[ControllerIndex];
-                    game_controller_input *NewController = &NewInput->Controllers[ControllerIndex];
-
-                    XINPUT_STATE ControllerState;
-                    if (XInputGetState(ControllerIndex, &ControllerState) == ERROR_SUCCESS) {
-
-                        // NOTE(Tejas): See XINPUT_GAMEPAD Defination...
-
-                        XINPUT_GAMEPAD *Pad = &ControllerState.Gamepad;
-
-                        bool Up    = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
-                        bool Down  = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
-                        bool Left  = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
-                        bool Right = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
-
-                        bool Start = (Pad->wButtons & XINPUT_GAMEPAD_START);
-                        bool Back  = (Pad->wButtons & XINPUT_GAMEPAD_BACK);
-
-                        bool LeftShoulder = (Pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
-                        bool RightShoulder = (Pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
-
-                        bool AButton = (Pad->wButtons & XINPUT_GAMEPAD_A);
-                        bool BButton = (Pad->wButtons & XINPUT_GAMEPAD_B);
-                        bool XButton = (Pad->wButtons & XINPUT_GAMEPAD_X);
-                        bool YButton = (Pad->wButtons & XINPUT_GAMEPAD_Y);
-
-                        // TODO(Tejas): I dont know how the values are calculate for the stick movement
-                        int16_t StickX = Pad->sThumbLX;
-                        int16_t StickY = Pad->sThumbLY;
-
-                        // TODO(Tejas): Do DeadZone Processing
-
-                        Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                        &OldController->Down, &NewController->Down,
-                                                         XINPUT_GAMEPAD_A);
-                        Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                        &OldController->Right, &NewController->Right,
-                                                        XINPUT_GAMEPAD_B);
-                        Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                        &OldController->Left, &NewController->Left,
-                                                        XINPUT_GAMEPAD_X);
-                        Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                        &OldController->Up, &NewController->Up,
-                                                        XINPUT_GAMEPAD_Y);
-                        Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                        &OldController->LeftShoulder, &NewController->LeftShoulder,
-                                                        XINPUT_GAMEPAD_LEFT_SHOULDER);
-                        Win32ProcessXInputDigitalButton(Pad->wButtons,
-                                                        &OldController->RightShoulder, &NewController->RightShoulder,
-                                                        XINPUT_GAMEPAD_RIGHT_SHOULDER);
-                        
-
-                        { // NOTE(Tejas): Exp code to test vibrations
-
-                            // const float MAX_STICK = 32767.0f;
-                            // const float DEADZONE = 0.1f;
-                            // const float OFFSET_SPEED = 5.0f;
-
-                            // float normX = StickX / MAX_STICK;
-                            // float normY = StickY / MAX_STICK;
-
-                            // if (fabsf(normX) < DEADZONE) normX = 0.0f;
-                            // if (fabsf(normY) < DEADZONE) normY = 0.0f;
-
-                            // normX = fminf(fmaxf(normX, -1.0f), 1.0f);
-                            // normY = fminf(fmaxf(normY, -1.0f), 1.0f);
-
-                            // float absX = fabsf(normX);
-                            // float absY = fabsf(normY);
-
-                            // WORD leftMotor  = (WORD)(absX * 5000.0f);
-                            // WORD rightMotor = (WORD)(absY * 5000.0f);
-
-                            // XINPUT_VIBRATION InputVibration = {};
-                            // InputVibration.wLeftMotorSpeed  = leftMotor;
-                            // InputVibration.wRightMotorSpeed = rightMotor;
-
-                            // XInputSetState(ControllerIndex, &InputVibration);
-
-                            // XINPUT_VIBRATION InputVibration = { };
-                            // if (Left || RIGHT) InputVibration.wLeftMotorSpeed  = 100;
-                            // if (Up || Down)    InputVibration.wRightMotorSpeed = 100;
-                            // XInputSetState(ControllerIndex, &InputVibration);
+                        if (ByteToLock > PlayCursor) {
+                            BytesToWrite = (SoundOutput.SecondaryBufferSize - ByteToLock);
+                            BytesToWrite += PlayCursor;
+                        } else {
+                            BytesToWrite = PlayCursor - ByteToLock;
                         }
 
-
-
-                    } else {
-
-                        // NOTE(Tejas): Controller at this ControllerIndex is not plugged in.
-                    }
-                }
-
-                DWORD PlayCursor, WriteCursor;
-                DWORD ByteToLock;
-                DWORD BytesToWrite;
-                bool SoundIsValid = false;
-                if (SUCCEEDED(GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor))) {
-
-                    ByteToLock = (SoundOutput.RunningSampleIndex * SoundOutput.BytesPerSample) % SoundOutput.SecondaryBufferSize;
-
-                    if (ByteToLock > PlayCursor) {
-                        BytesToWrite = (SoundOutput.SecondaryBufferSize - ByteToLock);
-                        BytesToWrite += PlayCursor;
-                    } else {
-                        BytesToWrite = PlayCursor - ByteToLock;
+                        SoundIsValid = true;
                     }
 
-                    SoundIsValid = true;
-                }
+                    game_sound_output_buffer SoundBuffer = { };
+                    SoundBuffer.SamplesPerSecond = SoundOutput.SamplesPerSecond;
+                    SoundBuffer.SampleCount = BytesToWrite / SoundOutput.BytesPerSample;
+                    SoundBuffer.Samples = Samples;
 
-                game_sound_output_buffer SoundBuffer = { };
-                SoundBuffer.SamplesPerSecond = SoundOutput.SamplesPerSecond;
-                SoundBuffer.SampleCount = BytesToWrite / SoundOutput.BytesPerSample;
-                SoundBuffer.Samples = Samples;
-
-                game_offscreen_buffer GameBuffer = { };
-                GameBuffer.Memory = GlobalBackbuffer.Memory;
-                GameBuffer.Width  = GlobalBackbuffer.Width;
-                GameBuffer.Height = GlobalBackbuffer.Height;
-                GameBuffer.Pitch  = GlobalBackbuffer.Pitch;
+                    game_offscreen_buffer GameBuffer = { };
+                    GameBuffer.Memory = GlobalBackbuffer.Memory;
+                    GameBuffer.Width  = GlobalBackbuffer.Width;
+                    GameBuffer.Height = GlobalBackbuffer.Height;
+                    GameBuffer.Pitch  = GlobalBackbuffer.Pitch;
 
 
-                GameUpdateAndRender(&GameMemory, &GameBuffer, &SoundBuffer, NewInput);
+                    GameUpdateAndRender(&GameMemory, &GameBuffer, &SoundBuffer, NewInput);
 
-                if (SoundIsValid) {
-                    Win32FillSoundBuffer(&SoundOutput, ByteToLock, BytesToWrite, &SoundBuffer);
-                }
+                    if (SoundIsValid) {
+                        Win32FillSoundBuffer(&SoundOutput, ByteToLock, BytesToWrite, &SoundBuffer);
+                    }
 
-                win32_window_dimention Dimentions = Win32GetWindowDimention(Window);
-                Win32DisplayBufferInWindow(DeviceContext, GlobalBackbuffer, 20, 20, Dimentions.Width, Dimentions.Height);
+                    win32_window_dimention Dimentions = Win32GetWindowDimention(Window);
+                    Win32DisplayBufferInWindow(DeviceContext, GlobalBackbuffer, 20, 20, Dimentions.Width, Dimentions.Height);
 
-                // NOTE(Tejas): Counting Time Elapsed
+                    // NOTE(Tejas): Counting Time Elapsed
 
-                // NOTE(Tejas): This returns the processor time stamps. This returns the number of clock cycles
-                //              since the last reset. (Read MSDN for __rdtsc)
-                uint64_t EndCycleCount = __rdtsc();
+                    // NOTE(Tejas): This returns the processor time stamps. This returns the number of clock cycles
+                    //              since the last reset. (Read MSDN for __rdtsc)
+                    uint64_t EndCycleCount = __rdtsc();
 
-                LARGE_INTEGER EndCounter;
-                QueryPerformanceCounter(&EndCounter);
+                    LARGE_INTEGER EndCounter;
+                    QueryPerformanceCounter(&EndCounter);
 
-                // NOTE(Tejas): Counting FrameTime.
-                int64_t CyclesElaspsed = EndCycleCount - LastCycleCount;
-                int64_t CounterElapsed = EndCounter.QuadPart - LastCounter.QuadPart;
-                float MiliSeconds = (float)(1000*CounterElapsed)/ (float)PerfCountFrequency;
-                float FPS = (float)PerfCountFrequency / (float)CounterElapsed;
-                float MegaCyclesPerFrame = (float)(CyclesElaspsed / (float)(1000 * 1000));
+                    // NOTE(Tejas): Counting FrameTime.
+                    int64_t CyclesElaspsed = EndCycleCount - LastCycleCount;
+                    int64_t CounterElapsed = EndCounter.QuadPart - LastCounter.QuadPart;
+                    float MiliSeconds = (float)(1000*CounterElapsed)/ (float)PerfCountFrequency;
+                    float FPS = (float)PerfCountFrequency / (float)CounterElapsed;
+                    float MegaCyclesPerFrame = (float)(CyclesElaspsed / (float)(1000 * 1000));
 
 #if 0
-                // FIXME(Tejas): This is Unsafe and needs to be replaced!
-                char Buffer[256] = {};
-                sprintf(Buffer, "%.2fms/f, %.2ff/s, %.2fmc/f\n", MiliSeconds, FPS, MegaCyclesPerFrame);
-                OutputDebugStringA(Buffer);
+                    // FIXME(Tejas): This is Unsafe and needs to be replaced!
+                    char Buffer[256] = {};
+                    sprintf(Buffer, "%.2fms/f, %.2ff/s, %.2fmc/f\n", MiliSeconds, FPS, MegaCyclesPerFrame);
+                    OutputDebugStringA(Buffer);
 #endif
 
-                LastCounter    = EndCounter;
-                LastCycleCount = EndCycleCount;
+                    LastCounter    = EndCounter;
+                    LastCycleCount = EndCycleCount;
 
-                game_input *Temp = NewInput;
-                NewInput = OldInput;
-                OldInput = Temp;
-                // TODO(Tejas): Should we clear these?
+                    game_input *Temp = NewInput;
+                    NewInput = OldInput;
+                    OldInput = Temp;
+                    // TODO(Tejas): Should we clear these?
+                }
             }
 
             VirtualFree(Samples, 0, MEM_RELEASE);

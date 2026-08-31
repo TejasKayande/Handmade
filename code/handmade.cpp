@@ -44,6 +44,7 @@ internal void RenderWeirdGradient(game_offscreen_buffer *GameBuffer, int XOffset
         Row += GameBuffer->Pitch;
     }
 }
+
 void GameUpdateAndRender(game_memory *Memory, game_offscreen_buffer *Buffer, game_sound_output_buffer *SoundBuffer, game_input *Input) {
 
     Assert(sizeof(game_state) <= Memory->PermanentStorageSize);
